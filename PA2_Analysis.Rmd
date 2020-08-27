@@ -1,0 +1,407 @@
+Impact of major weather events in the United States between 2001 and 2011
+=========================================================================
+
+## Synopsis
+
+In this report we analyse the public health and economic impact of storms and
+other major weather events in United States. Many of such severe events can
+result in fatalities, injuries, crop and property damage, and preventing such
+outcomes is a key concern for federal and state government and for municipalities.
+
+We explored the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm
+database and, using the data from 2001 to 2011, we found which type of event
+had most health and economic impact in those 10 years span.
+
+This report could be of interest to government or municipal managers who might be
+responsible for preparing for severe weather events and will need to prioritize
+resources for different types of events.
+
+Note: this report was made as an assignment for the [Reproducible Research](https://www.coursera.org/course/repdata)
+Coursera course. The report is made with [RMarkdown](http://rmarkdown.rstudio.com/)
+and [Knitr](http://yihui.name/knitr/).
+The source code is available on [github](https://github.com/maurotrb/RepData_PeerAssessment2.git)
+
+## Data Processing
+
+``` {r knitr_options, echo=FALSE, warning=FALSE, include=FALSE}
+require(knitr)
+opts_chunk$set(fig.path="figures/an-")
+```
+```{r load_libraries, echo=FALSE, warning=FALSE, include=FALSE}
+require(dplyr)
+require(lubridate)
+require(quantmod)
+require(xtable)
+```
+
+### Reading the data
+
+The [U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database](http://www.ncdc.noaa.gov/stormevents/)
+tracks characteristics of major storms and weather events in the United States,
+including when and where they occur, as well as estimates of any fatalities,
+injuries, and property damage.
+The events in the database start in the year 1950 and end in November 2011.
+
+We obtain a compressed file from the Coursera course site: [Storm data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) 
+[47Mb], and we read the raw text file included.
+
+```{r read_storm_data, cache=TRUE}
+storm_data_raw <- read.csv(bzfile("StormData.csv.bz2"))
+```
+
+We check the dimension and the first few rows of the data set.
+
+```{r check_storm_data, cache=TRUE}
+storm_data_dim <- dim(storm_data_raw)
+storm_data_dim
+head(storm_data_raw)
+```
+
+The data set contains `r storm_data_dim[1]` events and `r storm_data_dim[2]` variables.
+
+We are interested in the following variables.
+
+#### BGN_DATE
+
+Begin date of the event. The events could span many days, but for our purposes
+we date them with the begin date. We extract the year and we will use it to
+filter the events registered between 2001 and 2011.
+
+There are two reasons for this filter:
+
+* in the earlier years of the database (1950s-1960s-1970s-1980s) there are generally
+  fewer events recorded, most likely due to a lack of good records, and so data
+  from those periods could not be used to judge the relative impact of type of events
+  without a much accurate analysis of the data
+* we think that that the last 10 years of data is enough to evaluate which are
+  the most impactful type of events
+
+#### EVTYPE
+
+The NOAA storm database code book reports 48 event type. The event types in the data set
+are more than 9 hundred.
+
+```{r check_event_type, cache=TRUE}
+length(unique(storm_data_raw$EVTYPE))
+```
+
+Some difference are caused by upper and lower cases, but many of them are caused by
+incorrect imputation, especially in the early years.
+There is not an easy way to correct them so we looked for event types with 
+big values for fatalities and damage and use regular expression substitution
+to correct them. 
+
+```{r event_type_correction, cache=TRUE}
+storm_data_corrected <- storm_data_raw
+storm_data_corrected$EVTYPE <- toupper(storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^(SMALL )?HAIL.*", "HAIL", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("TSTM|THUNDERSTORMS?", "THUNDERSTORM", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("STORMS?", "STORM", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("WINDS?|WINDS?/HAIL", "WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("RAINS?", "RAIN", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^TH?UN?DEE?RS?TO?RO?M ?WIND.*|^(SEVERE )?THUNDERSTORM$|^WIND STORM$|^(DRY )?MI[CR][CR]OBURST.*|^THUNDERSTORMW$", "THUNDERSTORM WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^COASTAL ?STORM$|^MARINE ACCIDENT$", "MARINE THUNDERSTORM WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^FLOODS?.*|^URBAN/SML STREAM FLD$|^(RIVER|TIDAL|MAJOR|URBAN|MINOR|ICE JAM|RIVER AND STREAM|URBAN/SMALL STREAM)? FLOOD(ING)?S?$|^HIGH WATER$|^URBAN AND SMALL STREAM FLOODIN$|^DROWNING$|^DAM BREAK$", "FLOOD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^FLASH FLOOD.*|^RAPIDLY RISING WATER$", "FLASH FLOOD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("WATERSPOUTS?", "WATERSPOUT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("WEATHER/MIX", "WEATHER", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("CURRENTS?", "CURRENT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^WINDCHILL$|^COLD.*|^LOW TEMPERATURE$|^UNSEASONABLY COLD$", "COLD/WIND CHILL", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^EXTREME WIND ?CHILL$|^(EXTENDED|EXTREME|RECORD)? COLDS?$", "EXTREME COLD/WIND CHILL", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^WILD/FOREST FIRE$|^(WILD|BRUSH|FOREST)? ?FIRES?$", "WILDFIRE", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^RAIN/SNOW$|^(BLOWING|HEAVY|EXCESSIVE|BLOWING|ICE AND|RECORD)? ?SNOWS?.*", "HEAVY SNOW", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^FOG$", "DENSE FOG", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^(GUSTY|NON-SEVERE|NON ?-?THUNDERSTORM)? ?WIND.*|^ICE/STRONG WIND$", "STRONG WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("SURGE$", "SURGE/TIDE", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("CLOUDS?", "CLOUD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^FROST[/\\]FREEZE$|^FROST$|^(DAMAGING)? ?FREEZE$|^HYP[OE]R?THERMIA.*|^ICE$|^(ICY|ICE) ROADS$|^BLACK ICE$|^ICE ON ROAD$", "FROST/FREEZE", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^GLAZE.*|^FREEZING (RAIN|DRIZZLE|RAIN/SNOW|SPRAY$)$|^WINTRY MIX$|^MIXED PRECIP(ITATION)?$|^WINTER WEATHER MIX$|^LIGHT SNOW$|^FALLING SNOW/ICE$|^SLEET.*", "SLEET", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^HURRICANE.*", "HURRICANE/TYPHOON", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^HEAT WAVES?$|^UNSEASONABLY WARM$|^WARM WEATHER$", "HEAT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^(EXTREME|RECORD/EXCESSIVE|RECORD) HEAT$", "EXCESSIVE HEAT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^HEAVY SURF(/HIGH SURF)?.*$|^(ROUGH|HEAVY) SEAS?.*|^(ROUGH|ROGUE|HAZARDOUS) SURF.*|^HIGH WIND AND SEAS$|^HIGH SURF.*", "HIGH SURF", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^LAND(SLUMP|SLIDE)?S?$|^MUD ?SLIDES?$|^AVALANCH?E$", "AVALANCHE", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^UNSEASONABLY WARM AND DRY$|^DROUGHT.*|^HEAT WAVE DROUGHT$", "DROUGHT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^TORNADO.*", "TORNADO", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^TROPICAL STORM.*", "TROPICAL STORM", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^MARINE MISHAP$|^HIGH WIND/SEAS$", "MARINE HIGH WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^HIGH WIND.*", "HIGH WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^HIGH SEAS$", "MARINE STRONG WIND", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^RIP CURRENT.*", "RIP CURRENT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^WATERSPOUT.*", "WATERSPOUT", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^EXCESSIVE RAINFALL$|^RAIN.*|^TORRENTIAL RAINFALL$|^(HEAVY|HVY)? (RAIN|MIX|PRECIPITATION).*", "HEAVY RAIN", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^FOG.*", "FREEZING FOG", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^WINTER STORM.*", "WINTER STORM", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^THUNDERSNOW$|^ICE STORM.*", "ICE STORM", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("WAVES?|SWELLS?", "SURF", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^LIGHTNING.*", "LIGHTNING", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^WHIRLWIND$|^GUSTNADO$|^TORNDAO$", "TORNADO", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^COASTAL FLOOD.*", "COASTAL FLOOD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^TYPHOON", "HURRICANE/TYPHOON", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^EROSION/CSTL FLOOD$|^COASTAL FLOOD/EROSION$|^COASTAL SURGE/TIDE$", "COASTAL FLOOD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^ASTRONOMICAL HIGH TIDE$", "STORM SURGE/TIDE", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^(GROUND)? ?BLIZZARD.*$", "BLIZZARD", storm_data_corrected$EVTYPE)
+storm_data_corrected$EVTYPE <- gsub("^DUST STORM.*$", "DUST STORM", storm_data_corrected$EVTYPE)
+```
+
+#### FATALITIES and INJURIES
+
+Fatalities and injuries estimated for the event. These values are used to estimate
+the public health impact for type of events.
+
+#### PROPDMG and CROPDMG
+
+Property and crop damage estimated for the event. These values are used to estimate
+the economic impact for type of events.
+
+##### Exponent
+
+These variables are associated with PROPDMGEXP and CROPDMGEXP which are used
+as exponents to interpret the numeric values for the damage. There are not much
+information in the data code book about these variables.
+
+The only symbols with a clear meaning are:
+
+* H or h: for hundredth of dollars
+* K or k: for thousands of dollars
+* M or m: for million of dollars
+* B or b: for billion of dollars
+
+We sum the damage values grouped by the symbols.
+
+```{r exponent_summary, cache=TRUE, results='asis'}
+property_data_exp <- storm_data_raw %.%
+  group_by(PROPDMGEXP) %.%
+  summarise(property_damage_per_exp = sum(PROPDMG)) %.%
+  arrange(PROPDMGEXP)
+print(xtable(property_data_exp), type="html")
+crop_data_exp <- storm_data_raw %.%
+  group_by(CROPDMGEXP) %.%
+  summarise(crop_damage_per_exp = sum(CROPDMG)) %.%
+  arrange(CROPDMGEXP)
+print(xtable(crop_data_exp), type="html")
+```
+
+We see that the symbols without a clear meaning are associated with minimal
+values. So we use only the H, K, M, B symbols to interpret the damage amounts
+and we clear the amounts for the other symbols.
+
+We create a function to decode the symbols and return a multiplier for the amounts.
+We use as base value the million of dollars, as we are interested only in the
+most impactful damage. This function will be used to prepare the final data set.
+
+```{r exp_decode_function}
+# Function to decode the EXP symbol
+decode_exp <- function(exp_symbol) {
+  # Normalize to millions of dollars
+  if (toupper(exp_symbol) == "B") exp <-1000
+  else if (toupper(exp_symbol) == "M") exp <-1
+  else if (toupper(exp_symbol) == "K") exp <- 1/1000
+  else if (toupper(exp_symbol) == "H") exp <- 1/10000
+  # Don't know how to interpet other values
+  else exp <-0
+  return(exp)
+}
+decode_exp_v <- Vectorize(decode_exp)
+```
+
+##### Constant dollars
+
+To add up and compare amounts of different years, we have to convert them in
+[constant dollars](http://en.wikipedia.org/wiki/Constant_dollars), i.e. inflation
+adjusted amounts. 
+
+To compute a conversion factor for each year, we download the 
+[Consumer Price Index for All Urban Consumers: All Items](http://research.stlouisfed.org/fred2/series/CPIAUCSL)
+from [Federal Reserve Economic Data](http://research.stlouisfed.org/fred2/),
+we average the monthly CPI to obtain an annual value, and we compute a factor
+based at 2011 that could be multiplied with the amounts to adjust for the inflation.
+
+```{r constant_dollar_factor, message=FALSE, results='hide'}
+# Get Consumer Price Index from Federal Reserve Economic Data
+getSymbols("CPIAUCSL", src='FRED')
+# CPI is monthly. Calculate an annual average.
+annual_cpi <- apply.yearly(CPIAUCSL, mean)
+# Calculate conversion factor using 2011 as the base year
+conversion_factor <- 1 / annual_cpi * as.numeric(annual_cpi['2011'])
+```
+
+### Final dataset
+
+The final data set, used for the analysis, is obtained by:
+
+* filtering the 2001-2011 events
+* applying the exponent and the constant dollars factor to the property and crop amounts
+* renaming the variables to make them clearer
+
+```{r munge_storm_data, cache=TRUE}
+storm_data <- storm_data_corrected %.%
+  filter(year(mdy_hms(BGN_DATE)) >= 2001) %.%
+  mutate(property_damage_exp = decode_exp_v(PROPDMGEXP)
+        ,crop_damage_exp = decode_exp_v(CROPDMGEXP)
+        ,event_year = year(mdy_hms(BGN_DATE))
+        ,factor_cd = as.numeric(conversion_factor[as.character(event_year)])
+        ,property_damage = PROPDMG * property_damage_exp * factor_cd
+        ,crop_damage = CROPDMG * crop_damage_exp * factor_cd) %.%
+  select(event_year
+        ,event_type = EVTYPE
+        ,fatalities = FATALITIES
+        ,injuries = INJURIES
+        ,property_damage
+        ,crop_damage)
+```
+
+
+```{r check_storm_data_final, cache=TRUE, results='asis'}
+storm_data_final_dim <- dim(storm_data)
+storm_data_final_dim
+print(xtable(head(storm_data), digits = c(0,0,0,0,0,6,6)), type = "html")
+```
+
+The final data set contains `r storm_data_final_dim[1]` events and `r storm_data_final_dim[2]` variables.
+
+## Results
+
+The analysis aims to answer two question:
+
+* Across the United States, which types of events are most harmful with respect to population health?
+* Across the United States, which types of events have the greatest economic consequences?
+
+### Which types of events are most harmful?
+
+We consider as "harmful to population health"" the events with registered fatalities
+and injuries.
+
+We select only the events with fatalities and injuries.
+
+```{r fatalities_summary, cache=TRUE}
+fatalities_registered <- storm_data[storm_data$fatalities != 0, 3]
+injuries_registered <- storm_data[storm_data$injuries != 0, 4]
+fatalities_registered_sum <- sum(fatalities_registered)
+injuries_registered_sum <- sum(injuries_registered)
+summary(fatalities_registered)
+summary(injuries_registered)
+```
+
+We can see that in the 2001-2011 period were registered `r as.integer(fatalities_registered_sum)`
+fatalities and `r as.integer(injuries_registered_sum)` injuries.
+
+The distribution of fatalities has a median of 1, a third quartile of 1 and a max
+value of 158. This mean that more than the 75% of the events have 1 fatalities
+and there are few events with a large number of fatalities.
+
+Injuries has a similar distribution with a median of 1, a third quartile of 3
+and a max value of 1150.
+
+We can visually confirm these distribution with a boxplot of fatalities and injuries
+(figure 1).
+As the distribution is highly skewed towards 1, we have plotted the y axis as
+the logarithm in base 10 of fatalities and injuries to make the distribution clearer.
+
+```{r fatalities_boxplot, fig.width=12}
+par(mfrow=c(1,2), mar=c(5,2,2,2), oma=c(0,0,3,0))
+boxplot(fatalities_registered, log = "y", xlab = "Fatalities", ylim = c(1,1200))
+boxplot(injuries_registered, log = "y", xlab = "Injuries", ylim = c(1,1200))
+mtext("Fig. 1 - Fatalities and Injuries (log10)", side=3, line=1, outer=TRUE)
+```
+
+We find out the top 10 event types by fatalities and we compute the average
+number of fatalities per event types. For all the event type the average is less
+than 1.
+
+```{r event_type_fatalities_summary, results='asis'}
+event_type_fatalities_summary <- storm_data %.%
+  group_by(event_type) %.%
+  summarise(fatalities_per_type = sum(fatalities), event_count = n()) %.%
+  mutate(average_fatalities = fatalities_per_type / event_count) %.%
+  arrange(desc(fatalities_per_type, event_count))
+print(xtable(head(event_type_fatalities_summary, n = 10), digits = c(0,0,0,0,2)), type="html")
+```
+
+We find out the top 10 event types by injuries and we compute the average number
+of injuries per event types. Here stand out HURRICAN/TYPHOON with 9 average injuries
+per event, and EXCESSIVE HEAT with 3.
+
+```{r event_type_injuries_summary, results='asis'}
+event_type_injuries_summary <- storm_data %.%
+  group_by(event_type) %.%
+  summarise(injuries_per_type = sum(injuries), event_count = n()) %.%
+  mutate(average_injuries = injuries_per_type / event_count) %.%
+  arrange(desc(injuries_per_type, event_count))
+print(xtable(head(event_type_injuries_summary, n = 10), digits = c(0,0,0,0,2)), type="html")
+```
+
+Merging the two list we can see that the event types with the big impact on
+public health are:
+`r intersect(head(event_type_fatalities_summary$event_type, n = 10), head(event_type_injuries_summary$event_type, n = 10))`.
+
+### Which types of events have the greatest economic consequences?
+
+We consider as "with economic consequences"" the events with registered property
+and crop damage.
+
+We select only the events with property and crop damage.
+
+```{r property_damage_summary, cache=TRUE}
+property_damage_registered <- storm_data[storm_data$property_damage != 0, 5]
+crop_damage_registered <- storm_data[storm_data$crop_damage != 0, 6]
+property_damage_registered_sum <- sum(property_damage_registered)
+crop_damage_registered_sum <- sum(crop_damage_registered)
+summary(property_damage_registered)
+summary(crop_damage_registered)
+```
+
+We can see that in the 2001-2011 period were registered `r as.integer(property_damage_registered_sum)`
+property damage and `r as.integer(crop_damage_registered_sum)` crop damage
+(millions of dollars).
+
+The distribution of property damage has a median of 0, a third quartile of 0 and a max
+value of 128000 (million of dollars). This mean that more than the 75% of the events
+have sub-million property damage and there are few events with damage in the millions
+and even in the billions of dollars.
+
+Crop damage has a similar distribution with a median of 0, a third quartile of 0.1
+and a max value of 1740 (millions of dollars).
+
+We can visually confirm these distribution with a boxplot of property and crop damage
+(figure 2).
+As the distribution is highly skewed towards 0, we have plotted the y axis as
+the logarithm in base 10 of property and crop damage to make the distribution clearer.
+
+```{r property_damage_boxplot, fig.width=12}
+par(mfrow=c(1,2), mar=c(5,2,2,2), oma=c(0,0,3,0))
+boxplot(property_damage_registered, log = "y", xlab = "Property damage", ylim = c(.00001,100000))
+boxplot(crop_damage_registered, log = "y", xlab = "Crop damage", ylim = c(.00001,100000))
+mtext("Fig. 2 - Property and Crop damage - Millions of dollars (log10)", side=3, line=1, outer=TRUE)
+```
+
+We find out the top 10 event types by property damage and we compute the average
+number of property damage per event types. Here stand out HURRICAN/TYPHOON with 631
+million of dollars average property damage per event, and STORM SURGE/TIDE with 147
+million of dollars.
+
+```{r event_type_property_damage_summary, results='asis'}
+event_type_property_damage_summary <- storm_data %.%
+  group_by(event_type) %.%
+  summarise(property_damage_per_type = sum(property_damage), event_count = n()) %.%
+  mutate(average_property_damage = property_damage_per_type / event_count) %.%
+  arrange(desc(property_damage_per_type, event_count))
+print(xtable(head(event_type_property_damage_summary, n = 10), digits = c(0,0,0,0,2)), type="html")
+```
+
+We find out the top 10 event types by crop damage and we compute the average number
+of crop damage per event types. Here stands out HURRICAN/TYPHOON with 26
+million of dollars average crop damage per event.
+
+```{r event_type_crop_damage_summary, results='asis'}
+event_type_crop_damage_summary <- storm_data %.%
+  group_by(event_type) %.%
+  summarise(crop_damage_per_type = sum(crop_damage), event_count = n()) %.%
+  mutate(average_crop_damage = crop_damage_per_type / event_count) %.%
+  arrange(desc(crop_damage_per_type, event_count))
+print(xtable(head(event_type_crop_damage_summary, n = 10), digits = c(0,0,0,0,2)), type="html")
+```
+
+Merging the two list we can see that the event types with the big impact on
+public health are:
+`r intersect(head(event_type_property_damage_summary$event_type, n = 10), head(event_type_crop_damage_summary$event_type, n = 10))`.

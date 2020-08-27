@@ -1,0 +1,343 @@
+PA2 Exploration
+===============
+
+## Preparation
+
+Setting knitr options.
+``` {r knitr_options}
+require(knitr)
+opts_chunk$set(fig.path="figures/ex-")
+```
+
+Load required libraries.
+```{r load_libraries, warning=FALSE}
+require(dplyr)
+require(lubridate)
+require(quantmod)
+require(ggplot2)
+require(xtable)
+require(choroplethr)
+```
+
+## Load and munge storm data
+
+```{r read_storm_data, cache=TRUE}
+storm_data_raw <- read.csv(bzfile("StormData.csv.bz2"))
+```
+
+```{r munge_storm_data, cache=TRUE}
+# Function to decode the EXP symbol
+decode_exp <- function(exp_symbol) {
+  # Normalize to millions of dollars
+  if (toupper(exp_symbol) == "B") exp <-1000
+  else if (toupper(exp_symbol) == "M") exp <-1
+  else if (toupper(exp_symbol) == "K") exp <- 1/1000
+  else if (toupper(exp_symbol) == "H") exp <- 1/10000
+  # Don't know how to interpet other values
+  else exp <-0
+  return(exp)
+}
+decode_exp_v <- Vectorize(decode_exp)
+# Conversion factor to calculate amounts in constant dollars
+getSymbols("CPIAUCSL", src='FRED') # Get Consumer Price Index from Federal Reserve Economic Data
+avg.cpi <- apply.yearly(CPIAUCSL, mean) # Calculate an annual average
+cf <- 1 / avg.cpi * as.numeric(avg.cpi['2011']) # Calculate conversion factor using 2011 as the base year
+# Munge data
+storm_data <- storm_data_raw %.%
+  mutate(property_damage_exp = decode_exp_v(PROPDMGEXP)
+        ,crop_damage_exp = decode_exp_v(CROPDMGEXP)
+        ,event_year = year(mdy_hms(BGN_DATE))
+        ,factor_cd = as.numeric(cf[as.character(event_year)])
+        ,property_damage = PROPDMG * property_damage_exp * factor_cd
+        ,crop_damage = CROPDMG * crop_damage_exp * factor_cd) %.%
+  select(event_year
+        ,event_type = EVTYPE
+        ,state = STATE
+        ,fatalities = FATALITIES
+        ,injuries = INJURIES
+        ,property_damage
+        ,crop_damage)
+```
+
+## Event Type Correction
+
+The NWS documentation about the data reports only 48 event type. The numbers
+of event types present in the files are in the 900th.
+We could not correct all of them and assign one of the 48 correct ones.
+So we analyzed the first 50 event type by count and apply corrections only to
+them.
+
+```{r event_type_correction, results='asis'}
+storm_data_corrected <- storm_data
+storm_data_corrected$event_type <- toupper(storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^(SMALL )?HAIL.*", "HAIL", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("TSTM|THUNDERSTORMS?", "THUNDERSTORM", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("STORMS?", "STORM", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("WINDS?|WINDS?/HAIL", "WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("RAINS?", "RAIN", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^TH?UN?DEE?RS?TO?RO?M ?WIND.*|^(SEVERE )?THUNDERSTORM$|^WIND STORM$|^(DRY )?MI[CR][CR]OBURST.*|^THUNDERSTORMW$", "THUNDERSTORM WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^COASTAL ?STORM$|^MARINE ACCIDENT$", "MARINE THUNDERSTORM WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^FLOODS?.*|^URBAN/SML STREAM FLD$|^(RIVER|TIDAL|MAJOR|URBAN|MINOR|ICE JAM|RIVER AND STREAM|URBAN/SMALL STREAM)? FLOOD(ING)?S?$|^HIGH WATER$|^URBAN AND SMALL STREAM FLOODIN$|^DROWNING$|^DAM BREAK$", "FLOOD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^FLASH FLOOD.*|^RAPIDLY RISING WATER$", "FLASH FLOOD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("WATERSPOUTS?", "WATERSPOUT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("WEATHER/MIX", "WEATHER", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("CURRENTS?", "CURRENT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^WINDCHILL$|^COLD.*|^LOW TEMPERATURE$|^UNSEASONABLY COLD$", "COLD/WIND CHILL", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^EXTREME WIND ?CHILL$|^(EXTENDED|EXTREME|RECORD)? COLDS?$", "EXTREME COLD/WIND CHILL", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^WILD/FOREST FIRE$|^(WILD|BRUSH|FOREST)? ?FIRES?$", "WILDFIRE", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^RAIN/SNOW$|^(BLOWING|HEAVY|EXCESSIVE|BLOWING|ICE AND|RECORD)? ?SNOWS?.*", "HEAVY SNOW", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^FOG$", "DENSE FOG", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^(GUSTY|NON-SEVERE|NON ?-?THUNDERSTORM)? ?WIND.*|^ICE/STRONG WIND$", "STRONG WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("SURGE$", "SURGE/TIDE", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("CLOUDS?", "CLOUD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^FROST[/\\]FREEZE$|^FROST$|^(DAMAGING)? ?FREEZE$|^HYP[OE]R?THERMIA.*|^ICE$|^(ICY|ICE) ROADS$|^BLACK ICE$|^ICE ON ROAD$", "FROST/FREEZE", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^GLAZE.*|^FREEZING (RAIN|DRIZZLE|RAIN/SNOW|SPRAY$)$|^WINTRY MIX$|^MIXED PRECIP(ITATION)?$|^WINTER WEATHER MIX$|^LIGHT SNOW$|^FALLING SNOW/ICE$|^SLEET.*", "SLEET", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^HURRICANE.*", "HURRICANE/TYPHOON", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^HEAT WAVES?$|^UNSEASONABLY WARM$|^WARM WEATHER$", "HEAT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^(EXTREME|RECORD/EXCESSIVE|RECORD) HEAT$", "EXCESSIVE HEAT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^HEAVY SURF(/HIGH SURF)?.*$|^(ROUGH|HEAVY) SEAS?.*|^(ROUGH|ROGUE|HAZARDOUS) SURF.*|^HIGH WIND AND SEAS$|^HIGH SURF.*", "HIGH SURF", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^LAND(SLUMP|SLIDE)?S?$|^MUD ?SLIDES?$|^AVALANCH?E$", "AVALANCHE", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^UNSEASONABLY WARM AND DRY$|^DROUGHT.*|^HEAT WAVE DROUGHT$", "DROUGHT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^TORNADO.*", "TORNADO", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^TROPICAL STORM.*", "TROPICAL STORM", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^MARINE MISHAP$|^HIGH WIND/SEAS$", "MARINE HIGH WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^HIGH WIND.*", "HIGH WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^HIGH SEAS$", "MARINE STRONG WIND", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^RIP CURRENT.*", "RIP CURRENT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^WATERSPOUT.*", "WATERSPOUT", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^EXCESSIVE RAINFALL$|^RAIN.*|^TORRENTIAL RAINFALL$|^(HEAVY|HVY)? (RAIN|MIX|PRECIPITATION).*", "HEAVY RAIN", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^FOG.*", "FREEZING FOG", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^WINTER STORM.*", "WINTER STORM", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^THUNDERSNOW$|^ICE STORM.*", "ICE STORM", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("WAVES?|SWELLS?", "SURF", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^LIGHTNING.*", "LIGHTNING", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^WHIRLWIND$|^GUSTNADO$|^TORNDAO$", "TORNADO", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^COASTAL FLOOD.*", "COASTAL FLOOD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^TYPHOON", "HURRICANE/TYPHOON", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^EROSION/CSTL FLOOD$|^COASTAL FLOOD/EROSION$|^COASTAL SURGE/TIDE$", "COASTAL FLOOD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^ASTRONOMICAL HIGH TIDE$", "STORM SURGE/TIDE", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^(GROUND)? ?BLIZZARD.*$", "BLIZZARD", storm_data_corrected$event_type)
+storm_data_corrected$event_type <- gsub("^DUST STORM.*$", "DUST STORM", storm_data_corrected$event_type)
+```
+
+## Exploration
+
+#### Events Summary
+
+```{r event_year_with_impact_plot, results='asis', fig.width=12}
+event_year_with_impact <- storm_data_corrected %.%
+  filter(fatalities != 0 || injuries != 0 || property_damage != 0 || crop_damage != 0) %.%
+  group_by(event_year) %.%
+  summarise(event_per_year = n()) %.%
+  arrange(event_year)
+qplot(event_year, event_per_year, data = event_year_with_impact, geom = "path")
+```
+
+The events in the database start in the year 1950 and end in November 2011.
+In the earlier years of the database there are generally fewer events recorded,
+most likely due to a lack of good records. More recent years should be considered
+more complete.
+We will limit our analysis to the last 10 years: 2001-2011.
+
+```{r year_filter_2001_2011, cache=TRUE}
+storm_data_2001_2011 <- storm_data_corrected[storm_data_corrected$event_year >= 2001,]
+```
+
+### Fatalities Summary
+
+```{r fatalities_summary}
+sum(storm_data_2001_2011$fatalities)
+summary(storm_data_2001_2011$fatalities[storm_data_2001_2011$fatalities != 0])
+boxplot(storm_data_2001_2011$fatalities[storm_data_2001_2011$fatalities != 0], log = "y")
+```
+
+```{r event_type_fatalities_summary, results='asis'}
+event_type_fatalities_summary <- storm_data_2001_2011 %.%
+  group_by(event_type) %.%
+  summarise(fatalities_per_type = sum(fatalities), event_count = n()) %.%
+  mutate(fatalities_per_event_count = fatalities_per_type / event_count) %.%
+  arrange(desc(fatalities_per_type, event_count))
+print(xtable(event_type_fatalities_summary[event_type_fatalities_summary$fatalities_per_type != 0,]), type="html")
+```
+
+```{r top10_event_type_fatalities_year, results='asis', fig.height=15, fig.width=10}
+top10_event_type_fatalities <- event_type_fatalities_summary[1:10,]$event_type
+top10_event_type_fatalities_year <- storm_data_2001_2011 %.%
+  filter(event_type %in% top10_event_type_fatalities) %.%
+  group_by(event_year, event_type) %.%
+  summarise(fatalities_per_type_year = sum(fatalities)) %.%
+  arrange(event_year, event_type)
+qplot(event_year, fatalities_per_type_year, data = top10_event_type_fatalities_year, facets = event_type ~ ., geom = "path")
+```
+
+### Injuries Summary
+
+```{r injuries_summary}
+sum(storm_data_2001_2011$injuries)
+summary(storm_data_2001_2011$injuries[storm_data_2001_2011$injuries != 0])
+boxplot(storm_data_2001_2011$injuries[storm_data_2001_2011$injuries != 0], log = "y")
+```
+
+```{r event_type_injuries_summary, results='asis'}
+event_type_injuries_summary <- storm_data_2001_2011 %.%
+  group_by(event_type) %.%
+  summarise(injuries_per_type = sum(injuries), event_count = n()) %.%
+  mutate(injuries_per_event_count = injuries_per_type / event_count) %.%
+  arrange(desc(injuries_per_type, event_count))
+print(xtable(event_type_injuries_summary[event_type_injuries_summary$injuries_per_type != 0,]), type="html")
+```
+
+```{r top10_event_type_injuries_year, results='asis', fig.height=15, fig.width=10}
+top10_event_type_injuries <- event_type_injuries_summary[1:10,]$event_type
+top10_event_type_injuries_year <- storm_data_2001_2011 %.%
+  filter(event_type %in% top10_event_type_injuries) %.%
+  group_by(event_year, event_type) %.%
+  summarise(injuries_per_type_year = sum(injuries)) %.%
+  arrange(event_year, event_type)
+qplot(event_year, injuries_per_type_year, data = top10_event_type_injuries_year, facets = event_type ~ ., geom = "path")
+```
+
+### Property Damage Summary
+
+```{r property_damage_summary}
+sum(storm_data_2001_2011$property_damage)
+summary(storm_data_2001_2011$property_damage[storm_data_2001_2011$property_damage != 0])
+boxplot(storm_data_2001_2011$property_damage[storm_data_2001_2011$property_damage != 0], log = "y")
+```
+
+```{r event_type_property_damage_summary, results='asis'}
+event_type_property_damage_summary <- storm_data_2001_2011 %.%
+  group_by(event_type) %.%
+  summarise(property_damage_per_type = sum(property_damage), event_count = n()) %.%
+  mutate(property_damage_per_event_count = property_damage_per_type / event_count) %.%
+  arrange(desc(property_damage_per_type, event_count))
+print(xtable(event_type_property_damage_summary[event_type_property_damage_summary$property_damage_per_type != 0,]), type="html")
+```
+
+```{r top10_event_type_property_damage_year, results='asis', fig.height=15, fig.width=10}
+top10_event_type_property_damage <- event_type_property_damage_summary[1:10,]$event_type
+top10_event_type_property_damage_year <- storm_data_2001_2011 %.%
+  filter(event_type %in% top10_event_type_property_damage) %.%
+  group_by(event_year, event_type) %.%
+  summarise(property_damage_per_type_year = sum(property_damage)) %.%
+  arrange(event_year, event_type)
+qplot(event_year, property_damage_per_type_year, data = top10_event_type_property_damage_year, facets = event_type ~ ., geom = "path")
+```
+
+### Crop Damage Summary
+
+```{r crop_damage_summary}
+sum(storm_data_2001_2011$crop_damage)
+summary(storm_data_2001_2011$crop_damage[storm_data_2001_2011$crop_damage != 0])
+boxplot(storm_data_2001_2011$crop_damage[storm_data_2001_2011$crop_damage != 0], log = "y")
+```
+
+```{r event_type_crop_damage_summary, results='asis'}
+event_type_crop_damage_summary <- storm_data_2001_2011 %.%
+  group_by(event_type) %.%
+  summarise(crop_damage_per_type = sum(crop_damage), event_count = n()) %.%
+  mutate(crop_damage_per_event_count = crop_damage_per_type / event_count) %.%
+  arrange(desc(crop_damage_per_type, event_count))
+print(xtable(event_type_crop_damage_summary[event_type_crop_damage_summary$crop_damage_per_type != 0,]), type="html")
+```
+
+```{r top10_event_type_crop_damage_year, results='asis', fig.height=15, fig.width=10}
+top10_event_type_crop_damage <- event_type_crop_damage_summary[1:10,]$event_type
+top10_event_type_crop_damage_year <- storm_data_2001_2011 %.%
+  filter(event_type %in% top10_event_type_crop_damage) %.%
+  group_by(event_year, event_type) %.%
+  summarise(crop_damage_per_type_year = sum(crop_damage)) %.%
+  arrange(event_year, event_type)
+qplot(event_year, crop_damage_per_type_year, data = top10_event_type_crop_damage_year, facets = event_type ~ ., geom = "path")
+```
+
+### Top 10 events intersection
+
+```{r top10_event_intersection}
+top10_event_fatalities <- intersect(top10_event_type_injuries,top10_event_type_fatalities)
+top10_event_damage <- intersect(top10_event_type_crop_damage,top10_event_type_property_damage)
+top10_event_fatalities
+top10_event_damage
+```
+
+### State
+
+#### Events summary per State
+
+```{r state_event_summary, results='asis'}
+state_event_summary <- storm_data_2001_2011 %.%
+  group_by(state) %.%
+  summarise(event_per_state = n()) %.%
+  arrange(desc(event_per_state))
+print(xtable(head(state_event_summary, n = 20)), type="html")
+```
+
+```{r state_event_choroplethr, results='asis', fig.width=12}
+state_event_choroplethr <- state_event_summary %.%
+  select(region = state, value = event_per_state)
+choroplethr(state_event_choroplethr, "state", title="Events per state", num_buckets=4)
+```
+
+#### Fatalities summary per State
+
+```{r state_fatalities_summary, results='asis'}
+state_fatalities_summary <- storm_data_2001_2011 %.%
+  group_by(state) %.%
+  summarise(fatalities_per_state = sum(fatalities)) %.%
+  arrange(desc(fatalities_per_state))
+print(xtable(head(state_fatalities_summary, n = 20)), type="html")
+```
+
+```{r state_fatalities_choroplethr, results='asis', fig.width=12}
+state_fatalities_choroplethr <- state_fatalities_summary %.%
+  select(region = state, value = fatalities_per_state)
+choroplethr(state_fatalities_choroplethr, "state", title="Fatalities per state", num_buckets=4)
+```
+
+#### Injuries summary per State
+
+```{r state_injuries_summary, results='asis'}
+state_injuries_summary <- storm_data_2001_2011 %.%
+  group_by(state) %.%
+  summarise(injuries_per_state = sum(injuries)) %.%
+  arrange(desc(injuries_per_state))
+print(xtable(head(state_injuries_summary, n = 20)), type="html")
+```
+
+```{r state_injuries_choroplethr, results='asis', fig.width=12}
+state_injuries_choroplethr <- state_injuries_summary %.%
+  select(region = state, value = injuries_per_state)
+choroplethr(state_injuries_choroplethr, "state", title="Injuries per state", num_buckets=4)
+```
+
+#### Property damage summary per State
+
+```{r state_pdamage_summary, results='asis'}
+state_pdamage_summary <- storm_data_2001_2011 %.%
+  group_by(state) %.%
+  summarise(property_damage_per_state = sum(property_damage)) %.%
+  arrange(desc(property_damage_per_state))
+print(xtable(head(state_pdamage_summary, n = 20)), type="html")
+```
+
+```{r state_pdamage_choroplethr, results='asis', fig.width=12}
+state_pdamage_choroplethr <- state_pdamage_summary %.%
+  select(region = state, value = property_damage_per_state)
+choroplethr(state_pdamage_choroplethr, "state", title="Property damage per state", num_buckets=4)
+```
+
+#### Crop damage summary per State
+
+```{r state_cdamage_summary, results='asis'}
+state_cdamage_summary <- storm_data_2001_2011 %.%
+  group_by(state) %.%
+  summarise(crop_damage_per_state = sum(crop_damage)) %.%
+  arrange(desc(crop_damage_per_state))
+print(xtable(head(state_cdamage_summary, n = 20)), type="html")
+```
+
+```{r state_cdamage_choroplethr, results='asis', fig.width=12}
+state_cdamage_choroplethr <- state_cdamage_summary %.%
+  select(region = state, value = crop_damage_per_state)
+choroplethr(state_cdamage_choroplethr, "state", title="Crop damage per state", num_buckets=4)
+```
